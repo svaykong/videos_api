@@ -1,12 +1,13 @@
 import fs from 'fs'
 
 import express, { Request, Response, Express } from 'express'
+import cors from 'cors'
 
 import CONSTANTS from './constants'
 import COMMON from './common'
 
 const { BASE_URL, PORT } = CONSTANTS
-const { resolvePath, readFilePath } = COMMON
+const { resolvePath, readFilePath, getChunkProps, getFileSizeAndResolvedPath } = COMMON
 
 class Server {
     app: Express
@@ -14,7 +15,7 @@ class Server {
     port: number
 
     constructor() {
-        this.app = express()
+        this.app = express().use(cors())
         this.chunk = ""
         this.port = Number(process.env.PORT) || PORT
     }
@@ -102,6 +103,8 @@ class Server {
 
         this.app.get(`/${BASE_URL}/assets/videos/:video_url`, async (req: Request, res: Response) => {
             try {
+                const requestRangeHeader = req.headers.range
+
                 let videoDirPath = req.params.video_url
                 console.log("video url:: " + videoDirPath)
 
@@ -112,10 +115,29 @@ class Server {
 
                 if (data?.buffer.byteLength > 0) {
 
-                    res.writeHead(200, { 'Content-Type': 'video/mp4' });
+                    const { fileSize, resolvedPath } = getFileSizeAndResolvedPath(resolvePath(videoDirPath))
 
-                    const readStream = fs.createReadStream(resolvePath(videoDirPath));
-                    readStream.pipe(res);
+                    if (!requestRangeHeader) {
+                        res.writeHead(200, {
+                            'Content-Length': fileSize,
+                            'Content-Type': 'video/mp4',
+                        });
+                        // .pipe -> in a simple words it's like response.send() but for readStream
+                        fs.createReadStream(resolvePath(videoDirPath)).pipe(res);
+                    } else {
+                        const { start, end, chunkSize } = getChunkProps(requestRangeHeader, fileSize);
+
+                        // Read only part of the file from "start" to "end"
+                        const readStream = fs.createReadStream(resolvedPath, { start, end })
+
+                        res.writeHead(206, {
+                            'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                            'Accept-Ranges': 'bytes',
+                            'Content-Length': chunkSize,
+                            'Content-Type': 'video/mp4',
+                        });
+                        readStream.pipe(res)
+                    }
                 }
 
             } catch (error: any) {
